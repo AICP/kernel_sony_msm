@@ -109,6 +109,10 @@
 
 #define WLED4_SINK_REG_BRIGHT(n)			(0x57 + (n * 0x10))
 
+#define WLED_VERSION_3 0x30
+#define WLED_VERSION_4_0 0x40
+#define WLED_VERSION_4_1 0x41
+
 struct wled_var_cfg {
 	const u32 *values;
 	u32 (*fn)(u32);
@@ -168,14 +172,15 @@ struct wled {
 static int wled3_set_brightness(struct wled *wled, u16 brightness)
 {
 	int rc, i;
-	u8 v[2];
+	u16 v;
 
-	v[0] = brightness & 0xff;
-	v[1] = (brightness >> 8) & 0xf;
+	v = __cpu_to_le16(brightness & 0xfff);
 
 	for (i = 0;  i < wled->cfg.num_strings; ++i) {
 		rc = regmap_bulk_write(wled->regmap, wled->ctrl_addr +
-				       WLED3_SINK_REG_BRIGHT(i), v, 2);
+				       WLED3_SINK_REG_BRIGHT(
+				       wled->cfg.enabled_strings[i]),
+				       &v, 2);
 		if (rc < 0)
 			return rc;
 	}
@@ -186,19 +191,19 @@ static int wled3_set_brightness(struct wled *wled, u16 brightness)
 static int wled4_set_brightness(struct wled *wled, u16 brightness)
 {
 	int rc, i;
-	u16 low_limit = wled->max_brightness * 4 / 1000;
-	u8 v[2];
+	u16 v, low_limit = wled->max_brightness * 4 / 1000;
 
 	/* WLED4's lower limit of operation is 0.4% */
 	if (brightness > 0 && brightness < low_limit)
 		brightness = low_limit;
 
-	v[0] = brightness & 0xff;
-	v[1] = (brightness >> 8) & 0xf;
+	v = __cpu_to_le16(brightness & 0xfff);
 
-	for (i = 0;  i < wled->cfg.num_strings; ++i) {
+	for (i = 0; i < wled->cfg.num_strings; ++i) {
 		rc = regmap_bulk_write(wled->regmap, wled->sink_addr +
-				       WLED4_SINK_REG_BRIGHT(i), v, 2);
+				       WLED4_SINK_REG_BRIGHT(
+				       wled->cfg.enabled_strings[i]),
+				       &v, 2);
 		if (rc < 0)
 			return rc;
 	}
@@ -863,6 +868,7 @@ static const struct wled_config wled4_config_defaults = {
 	.cabc = false,
 	.external_pfet = false,
 	.auto_detection_enabled = false,
+	.enabled_strings = {0, 1, 2, 3},
 };
 
 static const u32 wled3_boost_i_limit_values[] = {
@@ -874,13 +880,22 @@ static const struct wled_var_cfg wled3_boost_i_limit_cfg = {
 	.size = ARRAY_SIZE(wled3_boost_i_limit_values),
 };
 
-static const u32 wled4_boost_i_limit_values[] = {
+static const u32 wled4_0_boost_i_limit_values[] = {
+	105, 385, 660, 980, 1150, 1420, 1700, 1980,
+};
+
+static const struct wled_var_cfg wled4_0_boost_i_limit_cfg = {
+	.values = wled4_0_boost_i_limit_values,
+	.size = ARRAY_SIZE(wled4_0_boost_i_limit_values),
+};
+
+static const u32 wled4_1_boost_i_limit_values[] = {
 	105, 280, 450, 620, 970, 1150, 1300, 1500,
 };
 
-static const struct wled_var_cfg wled4_boost_i_limit_cfg = {
-	.values = wled4_boost_i_limit_values,
-	.size = ARRAY_SIZE(wled4_boost_i_limit_values),
+static const struct wled_var_cfg wled4_1_boost_i_limit_cfg = {
+	.values = wled4_1_boost_i_limit_values,
+	.size = ARRAY_SIZE(wled4_1_boost_i_limit_values),
 };
 
 static const u32 wled3_ovp_values[] = {
@@ -892,13 +907,22 @@ static const struct wled_var_cfg wled3_ovp_cfg = {
 	.size = ARRAY_SIZE(wled3_ovp_values),
 };
 
-static const u32 wled4_ovp_values[] = {
+static const u32 wled4_0_ovp_values[] = {
+	31000, 29500, 19400, 17800,
+};
+
+static const struct wled_var_cfg wled4_0_ovp_cfg = {
+	.values = wled4_0_ovp_values,
+	.size = ARRAY_SIZE(wled4_0_ovp_values),
+};
+
+static const u32 wled4_1_ovp_values[] = {
 	31100, 29600, 19600, 18100,
 };
 
-static const struct wled_var_cfg wled4_ovp_cfg = {
-	.values = wled4_ovp_values,
-	.size = ARRAY_SIZE(wled4_ovp_values),
+static const struct wled_var_cfg wled4_1_ovp_cfg = {
+	.values = wled4_1_ovp_values,
+	.size = ARRAY_SIZE(wled4_1_ovp_values),
 };
 
 static u32 wled3_num_strings_values_fn(u32 idx)
@@ -996,11 +1020,11 @@ static int wled_configure(struct wled *wled, int version)
 		},
 	};
 
-	const struct wled_u32_opts wled4_opts[] = {
+	const struct wled_u32_opts wled4_0_opts[] = {
 		{
 			.name = "qcom,current-boost-limit",
 			.val_ptr = &cfg->boost_i_limit,
-			.cfg = &wled4_boost_i_limit_cfg,
+			.cfg = &wled4_0_boost_i_limit_cfg,
 		},
 		{
 			.name = "qcom,current-limit-microamp",
@@ -1010,7 +1034,35 @@ static int wled_configure(struct wled *wled, int version)
 		{
 			.name = "qcom,ovp-millivolt",
 			.val_ptr = &cfg->ovp,
-			.cfg = &wled4_ovp_cfg,
+			.cfg = &wled4_0_ovp_cfg,
+		},
+		{
+			.name = "qcom,switching-freq",
+			.val_ptr = &cfg->switch_freq,
+			.cfg = &wled3_switch_freq_cfg,
+		},
+		{
+			.name = "qcom,num-strings",
+			.val_ptr = &cfg->num_strings,
+			.cfg = &wled4_num_strings_cfg,
+		},
+	};
+
+	const struct wled_u32_opts wled4_1_opts[] = {
+		{
+			.name = "qcom,current-boost-limit",
+			.val_ptr = &cfg->boost_i_limit,
+			.cfg = &wled4_1_boost_i_limit_cfg,
+		},
+		{
+			.name = "qcom,current-limit-microamp",
+			.val_ptr = &cfg->string_i_limit,
+			.cfg = &wled4_string_i_limit_cfg,
+		},
+		{
+			.name = "qcom,ovp-millivolt",
+			.val_ptr = &cfg->ovp,
+			.cfg = &wled4_1_ovp_cfg,
 		},
 		{
 			.name = "qcom,switching-freq",
@@ -1044,7 +1096,7 @@ static int wled_configure(struct wled *wled, int version)
 		wled->name = dev->of_node->name;
 
 	switch (version) {
-	case 3:
+	case WLED_VERSION_3:
 		u32_opts = wled3_opts;
 		size = ARRAY_SIZE(wled3_opts);
 		*cfg = wled3_config_defaults;
@@ -1053,9 +1105,15 @@ static int wled_configure(struct wled *wled, int version)
 		wled->sink_addr = wled->ctrl_addr;
 		break;
 
-	case 4:
-		u32_opts = wled4_opts;
-		size = ARRAY_SIZE(wled4_opts);
+	case WLED_VERSION_4_0:
+	case WLED_VERSION_4_1:
+		if (version == WLED_VERSION_4_0) {
+			u32_opts = wled4_0_opts;
+			size = ARRAY_SIZE(wled4_0_opts);
+		} else if (version == WLED_VERSION_4_1) {
+			u32_opts = wled4_1_opts;
+			size = ARRAY_SIZE(wled4_1_opts);
+		}
 		*cfg = wled4_config_defaults;
 		wled->wled_set_brightness = wled4_set_brightness;
 		wled->max_string_count = 4;
@@ -1109,11 +1167,18 @@ static int wled_configure(struct wled *wled, int version)
 	string_len = of_property_count_elems_of_size(dev->of_node,
 						     "qcom,enabled-strings",
 						     sizeof(u32));
-	if (string_len > 0)
-		of_property_read_u32_array(dev->of_node,
+	if (string_len > 0) {
+		rc = of_property_read_u32_array(dev->of_node,
 						"qcom,enabled-strings",
 						wled->cfg.enabled_strings,
-						sizeof(u32));
+						string_len);
+
+		if (rc < 0) {
+			dev_err(dev, "Failed to read qcom,enabled-strings\n");
+			return rc;
+		}
+		cfg->num_strings = string_len;
+	}
 
 	return 0;
 }
@@ -1223,7 +1288,7 @@ static int wled_probe(struct platform_device *pdev)
 		return rc;
 
 	switch (version) {
-	case 3:
+	case WLED_VERSION_3:
 		wled->cfg.auto_detection_enabled = false;
 		rc = wled3_setup(wled);
 		if (rc) {
@@ -1232,7 +1297,8 @@ static int wled_probe(struct platform_device *pdev)
 		}
 		break;
 
-	case 4:
+	case WLED_VERSION_4_0:
+	case WLED_VERSION_4_1:
 		wled->has_short_detect = true;
 		rc = wled4_setup(wled);
 		if (rc) {
@@ -1282,9 +1348,10 @@ static int wled_remove(struct platform_device *pdev)
 }
 
 static const struct of_device_id wled_match_table[] = {
-	{ .compatible = "qcom,pm8941-wled", .data = (void *)3 },
-	{ .compatible = "qcom,pmi8998-wled", .data = (void *)4 },
-	{ .compatible = "qcom,pm660l-wled", .data = (void *)4 },
+	{ .compatible = "qcom,pm8941-wled", .data = (void*)WLED_VERSION_3 },
+	{ .compatible = "qcom,pmi8994-wled", .data = (void*)WLED_VERSION_4_0 },
+	{ .compatible = "qcom,pmi8998-wled", .data = (void*)WLED_VERSION_4_1 },
+	{ .compatible = "qcom,pm660l-wled", .data = (void*)WLED_VERSION_4_1 },
 	{}
 };
 MODULE_DEVICE_TABLE(of, wled_match_table);
