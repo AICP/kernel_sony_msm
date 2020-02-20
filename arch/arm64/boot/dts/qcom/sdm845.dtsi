@@ -2304,7 +2304,7 @@
 	};
 
 	system_pm {
-		compatible = "qcom,system-pm";
+		compatible = "qcom,system-pm-sdm845";
 		mboxes = <&apps_rsc 0>;
 	};
 
@@ -3261,7 +3261,7 @@
 	};
 
 	qmi-tmd-devices {
-		compatible = "qcom,qmi_cooling_devices";
+		compatible = "qcom,qmi-cooling-devices";
 
 		modem {
 			qcom,instance-id = <0x0>;

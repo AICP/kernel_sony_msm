@@ -3393,7 +3393,7 @@ static int cam_isp_blob_fps_config(
 	struct cam_ife_hw_mgr_res             *hw_mgr_res;
 	struct cam_hw_intf                    *hw_intf;
 	struct cam_vfe_fps_config_args         fps_config_args;
-	int                                    rc = -EINVAL;
+	int                                    rc = 0;
 	uint32_t                               i;
 
 	ctx = prepare->ctxt_to_hw_map;
@@ -6265,7 +6265,7 @@ static int cam_ife_hw_mgr_debug_register(void)
 		goto err;
 	}
 
-	g_ife_hw_mgr.debug_cfg.enable_recovery = 0;
+	g_ife_hw_mgr.debug_cfg.enable_recovery = 1;
 
 	return 0;
 

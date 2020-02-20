@@ -2324,7 +2324,8 @@ int gsi_alloc_channel(struct gsi_chan_props *props, unsigned long dev_hdl,
 		GSI_NO_EVT_ERINDEX;
 	if (erindex != GSI_NO_EVT_ERINDEX) {
 		ctx->evtr = &gsi_ctx->evtr[erindex];
-		atomic_inc(&ctx->evtr->chan_ref_cnt);
+		if (props->prot != GSI_CHAN_PROT_GCI)
+			atomic_inc(&ctx->evtr->chan_ref_cnt);
 		if (props->prot != GSI_CHAN_PROT_GCI &&
 		    ctx->evtr->props.exclusive)
 			ctx->evtr->chan = ctx;
@@ -3031,7 +3032,7 @@ int gsi_dealloc_channel(unsigned long chan_hdl)
 	}
 	devm_kfree(gsi_ctx->dev, ctx->user_data);
 	ctx->allocated = false;
-	if (ctx->evtr)
+	if (ctx->evtr && (ctx->props.prot != GSI_CHAN_PROT_GCI))
 		atomic_dec(&ctx->evtr->chan_ref_cnt);
 	atomic_dec(&gsi_ctx->num_chan);
 
@@ -3331,7 +3332,7 @@ int gsi_queue_xfer(unsigned long chan_hdl, uint16_t num_xfers,
 		return -GSI_STATUS_NODEV;
 	}
 
-	if (chan_hdl >= gsi_ctx->max_ch || !num_xfers || !xfer) {
+	if (chan_hdl >= gsi_ctx->max_ch || (num_xfers && !xfer)) {
 		GSIERR("bad params chan_hdl=%lu num_xfers=%u xfer=%pK\n",
 				chan_hdl, num_xfers, xfer);
 		return -GSI_STATUS_INVALID_PARAMS;
@@ -3359,6 +3360,11 @@ int gsi_queue_xfer(unsigned long chan_hdl, uint16_t num_xfers,
 		slock = &ctx->ring.slock;
 
 	spin_lock_irqsave(slock, flags);
+
+	/* allow only ring doorbell */
+	if (!num_xfers)
+		goto ring_doorbell;
+
 	/*
 	 * for GCI channels the responsibility is on the caller to make sure
 	 * there is enough room in the TRE.
@@ -3394,11 +3400,12 @@ int gsi_queue_xfer(unsigned long chan_hdl, uint16_t num_xfers,
 
 	ctx->stats.queued += num_xfers;
 
-	/* ensure TRE is set before ringing doorbell */
-	wmb();
-
-	if (ring_db)
+ring_doorbell:
+	if (ring_db) {
+		/* ensure TRE is set before ringing doorbell */
+		wmb();
 		gsi_ring_chan_doorbell(ctx);
+	}
 
 	spin_unlock_irqrestore(slock, flags);
 
@@ -3580,6 +3587,8 @@ int gsi_config_channel_mode(unsigned long chan_hdl, enum gsi_chan_mode mode)
 		gsi_writel(1 << ctx->evtr->id, gsi_ctx->base +
 			GSI_EE_n_CNTXT_SRC_IEOB_IRQ_CLR_OFFS(gsi_ctx->per.ee));
 		atomic_set(&ctx->poll_mode, mode);
+		if (ctx->props.prot == GSI_CHAN_PROT_GCI)
+			atomic_set(&ctx->evtr->chan->poll_mode, mode);
 		GSIDBG("set gsi_ctx evtr_id %d to %d mode\n",
 			ctx->evtr->id, mode);
 		ctx->stats.callback_to_poll++;
@@ -3588,6 +3597,8 @@ int gsi_config_channel_mode(unsigned long chan_hdl, enum gsi_chan_mode mode)
 	if (curr == GSI_CHAN_MODE_POLL &&
 			mode == GSI_CHAN_MODE_CALLBACK) {
 		atomic_set(&ctx->poll_mode, mode);
+		if (ctx->props.prot == GSI_CHAN_PROT_GCI)
+			atomic_set(&ctx->evtr->chan->poll_mode, mode);
 		__gsi_config_ieob_irq(gsi_ctx->per.ee, 1 << ctx->evtr->id, ~0);
 		GSIDBG("set gsi_ctx evtr_id %d to %d mode\n",
 			ctx->evtr->id, mode);
